@@ -16,3 +16,27 @@ dependencies = [
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "deptry>=0.24.0",
+    "mypy>=1.18.2",
+    "pre-commit>=4.3.0",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "responses>=0.25.8", # Lib for mocking out requests lib for tests
+    "ruff>=0.14.6",
+    "types-requests>=2.32.4.20250913", # stub package
+]
+
+[tool.mypy]
+mypy_path = ["src"]       # Make src the import root so modules are resolved as `scrape_tables.*`
+files = ["src", "tests"]  # Explicit files to check (prevents accidental duplicate discovery)
+ignore_missing_imports = false  # Display error for all missing imports
+strict=true                     # basic, standard, strict
+
+[tool.deptry]
+known_first_party = ["router_monitor"]  # <https://deptry.com/usage/#known-first-party>
+    [tool.deptry.per_rule_ignores]     # <https://deptry.com/usage/#per-rule-ignores>
+    DEP002 = [] # packages that are installed but not imported (unused dependencies)
+    DEP003 = [] # packages that are imported but not installed (transitive dependencies)

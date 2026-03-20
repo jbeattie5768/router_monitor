@@ -1,25 +1,26 @@
 # uv run --with requests --with python-dotenv .\scrape_wifi2.py
 # uv run ./src/router_monitor/brightbox.py
 
+from __future__ import annotations
+
 import argparse
 import ast
 import hashlib
 import logging
 import os
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, cast
 
 import requests
 from dotenv import find_dotenv, load_dotenv
 from rich.console import Console
 from rich.table import Table
 
+logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Final
 
 
-logger = logging.getLogger(__name__)
 console = Console()
 
 # Constants
@@ -173,7 +174,7 @@ def extract_js_variable(js_blob: str, variable: str) -> list[dict[str, str] | No
         logger.error(msg)
         raise ValueError(msg)
     python_literal = js_literal_to_python(match.group(1))
-    return ast.literal_eval(python_literal)
+    return cast("list[dict[str, str] | None]", ast.literal_eval(python_literal))
 
 
 def fetch_line_status(session: requests.Session) -> dict[str, str]:
