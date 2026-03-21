@@ -6,5 +6,8 @@
         "deptry",
         "Ehtm",
         "Fadv"
-    ]
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "uv": true
+    }
 }

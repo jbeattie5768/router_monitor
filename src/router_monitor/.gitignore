@@ -1,0 +1,30 @@
+# Ignore my Temp Files
+*foo
+*bar
+*fubar
+*foobar
+*baz
+deleteme.*
+temp*.*
+test.txt
+
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual Environments
+.venv
+
+# Ruff specifics
+.ruff_cache/
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# PyTest
+.cov*
