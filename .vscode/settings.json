@@ -1,11 +1,21 @@
 {
     "cSpell.words": [
         "brightbox",
+        "BSSID",
         "Chann",
         "defpg",
+        "delenv",
         "deptry",
         "Ehtm",
-        "Fadv"
+        "ESSID",
+        "Fadv",
+        "frag",
+        "iwconfig",
+        "MSCS",
+        "netsh",
+        "nwid",
+        "Rssi",
+        "wlan"
     ],
     "chat.tools.terminal.autoApprove": {
         "uv": true

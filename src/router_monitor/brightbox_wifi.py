@@ -1,50 +1,98 @@
+import os
 import re
 import subprocess
+from typing import Final
 
 from rich.console import Console
 from rich.table import Table
 
-# Fields from "netsh wlan show interfaces"
+# Fields from PowerShell "netsh wlan show interfaces" (Windows)
 # Selected fields to monitor Wi-Fi performance
-SELECTED_FIELDS = {
-    # "Name",
+NT_SELECTED_FIELDS: Final[set[str]] = {
+    # "Name",  # interface name
     # "Description",
     # "GUID",
-    "Physical address",
+    # "Physical address",  # I think this is the ethernet MAC addr
     # "Interface type",
     # "State",
-    "SSID",
-    # "AP BSSID",
-    "Band",
-    "Channel",
+    "SSID",  # name of the access point
+    "AP BSSID",  # MAC address of the access point
+    "Band",  # wifi band, e.g. 2.4GHz, 5GHz
+    "Channel",  # freq channel number, e.g. 1, 6, 11
     # "Connected Akm-cipher",
     # "Network type",
-    "Radio type",
+    # "Radio type",
     # "Authentication",
     # "Cipher",
     # "Connection mode",
-    "Receive rate (Mbps)",
+    # "Receive rate (Mbps)",
     "Transmit rate (Mbps)",
-    "Signal",
-    "Rssi",
+    "Signal",  # calc of link/level/noise
+    "Rssi",  # rx signal strength (dBm)
     # "Profile",
     # "QoS MSCS Configured",
     # "QoS Map Configured",
     # "QoS Map Allowed by Policy",
 }
 
+# Fields from "iwconfig wlan0" (Linux)
+# Selected fields to monitor Wi-Fi performance
+POSIX_NT_SELECTED_FIELDS: Final[set[str]] = {
+    "ESSID",  # name of the access point
+    # "Mode",  # e.g. Master, Ad-Hoc, Managed
+    "Frequency",  # channel frequency, e.g. 2437MHz for channel 6
+    "Access Point",  # MAC address of the access point
+    "Bit Rate",  # current transmit rate (Mbps)
+    # "Tx-Power",  # transmit power level (dBm)
+    # "Retry short limit",
+    # "RTS thr",
+    # "Fragment thr",
+    # "Power Management",  # on/off
+    "Link Quality",  # calc of link/level/noise
+    "Signal level",  # rx signal strength (dBm)
+    # "Rx invalid nwid",
+    # "Rx invalid crypt",
+    # "Rx invalid frag",
+    # "Tx excessive retries",
+    # "Invalid misc",
+    # "Missed beacon",
+}
 
-def get_wlan_info():
+if os.name == "nt":
+    SELECTED_FIELDS: Final[set[str]] = NT_SELECTED_FIELDS
+else:
+    SELECTED_FIELDS: Final[set[str]] = POSIX_NT_SELECTED_FIELDS
+
+# fmt: off
+# Matching fields for 'nt' (Windows) and 'posix' (Linux) platforms
+MAP_SELECTED_FIELDS: Final[dict[str, dict[str, str]]] = {
+    "SSID":     {"nt": "SSID",                 "posix": "ESSID"},
+    "MAC":      {"nt": "AP BSSID",             "posix": "Address"},
+    "Band":     {"nt": "Band",                 "posix": "Frequency"},  # calculate band from freq in posix
+    "Channel":  {"nt": "Channel",              "posix": "Frequency"},  # calculate chan from freq in posix
+    "Bit Rate": {"nt": "Transmit rate (Mbps)", "posix": "Bit Rate"},
+    "Quality":  {"nt": "Signal",               "posix": "Link Quality"},
+    "RSSI":     {"nt": "Rssi",                 "posix": "Signal level"},
+    "Rate":     {"nt": "Receive rate (Mbps)",  "posix": "Bit Rate"},
+}
+# fmt: on
+
+
+def get_wlan_info_windows() -> dict[str, str]:
     # Run the PowerShell command
-    result = subprocess.run(
-        ["powershell", "-Command", "netsh wlan show interfaces"], capture_output=True, text=True, encoding="utf-8"
+    result: subprocess.CompletedProcess[str] = subprocess.run(
+        ["powershell", "-Command", "netsh wlan show interfaces"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
     )
 
     output = result.stdout.splitlines()
-    info = {}
+    info: dict[str, str] = {}
 
     # Regex to match "Key : Value" lines
-    pattern = re.compile(r"^\s*([^:]+)\s*:\s*(.*)$")
+    pattern: re.Pattern[str] = re.compile(r"^\s*([^:]+)\s*:\s*(.*)$")
 
     for line in output:
         match = pattern.match(line)
@@ -58,10 +106,45 @@ def get_wlan_info():
     return info
 
 
-def main():
-    wlan_info = get_wlan_info()
-    console = Console()
-    table = Table(title="Wireless Interface", show_lines=True)
+def get_wlan_info_posix() -> dict[str, str]:
+    # Run the iwconfig command
+    result: subprocess.CompletedProcess[str] = subprocess.run(
+        ["iwconfig", "wlan0"],  # noqa: S607
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+
+    output = result.stdout.splitlines()
+    info: dict[str, str] = {}
+
+    # Regex to match "Key:Value" or "Key=Value" patterns
+    pattern: re.Pattern[str] = re.compile(r"(\b\w[\w\s]*\b)[=:](\S+)")
+
+    for line in output:
+        matches = pattern.findall(line)
+        for key, value in matches:
+            stripped_key = key.strip()
+            stripped_value = value.strip().strip('"')  # Remove any surrounding quotes
+
+            if stripped_key in SELECTED_FIELDS:
+                info[stripped_key] = stripped_value
+
+    return info
+
+
+def get_wlan_info() -> dict[str, str]:
+    if os.name == "nt":
+        return get_wlan_info_windows()
+
+    return get_wlan_info_posix()
+
+
+def main() -> None:
+    wlan_info: dict[str, str] = get_wlan_info()
+    console: Console = Console()
+    table: Table = Table(title="Wireless Interface", show_lines=True)
 
     table.add_column("Field", style="bold cyan")
     table.add_column("Value", style="bold yellow")
