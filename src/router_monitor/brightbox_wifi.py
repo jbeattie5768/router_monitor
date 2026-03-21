@@ -120,7 +120,8 @@ def get_wlan_info_posix() -> dict[str, str]:
     info: dict[str, str] = {}
 
     # Regex to match "Key:Value" or "Key=Value" patterns
-    pattern: re.Pattern[str] = re.compile(r"(\b\w[\w\s]*\b)[=:](\S+)")
+    # pattern: re.Pattern[str] = re.compile(r"(\b\w[\w\s]*\b)[=:](\S+)")
+    pattern: re.Pattern[str] = re.compile(r'([A-Za-z][A-Za-z ]*[A-Za-z])\s*[:=]\s*("?[^"\s]+[^"]*"?)(?=\s|$)')
 
     for line in output:
         matches = pattern.findall(line)
