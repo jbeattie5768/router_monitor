@@ -179,17 +179,27 @@ def extract_js_variable(js_blob: str, variable: str) -> list[dict[str, str] | No
 
 def fetch_line_status(session: requests.Session) -> dict[str, str]:
     """Fetch DSL status JS and return the first xdslLineStatus entry."""
-    logger.info("Requesting status page %s for URN", STATUS_HTM)
-    status_resp = session.get(STATUS_HTM)
-    logger.info("Status page response: %s", status_resp.status_code)
+    max_retry_attempts = 4
+    retry_attempt_count = 0
 
-    match = re.search(r"var\s+new_urn\s*=\s*'([^']+)'", status_resp.text)
-    if match is None:
-        msg = "Could not extract new_urn in status.htm response"
-        logger.error(msg)
-        raise RuntimeError(msg)
-    urn_value = match.group(1)
-    logger.info("Extracted URN cookie: %s", urn_value)
+    # STATUS_HTML has been seen to not be populated with URN Cookie
+    # If that happens, retry max_retry_attempts times
+    while True:
+        logger.info("Requesting status page %s for URN", STATUS_HTM)
+        status_resp = session.get(STATUS_HTM)
+        logger.info("Status page response: %s", status_resp.status_code)
+
+        match = re.search(r"var\s+new_urn\s*=\s*'([^']+)'", status_resp.text)
+        if match is None:
+            retry_attempt_count += 1
+            if retry_attempt_count > max_retry_attempts:
+                msg = "Could not extract new_urn in status.htm response"
+                logger.error(msg)
+                raise RuntimeError(msg)
+        
+        urn_value = match.group(1)
+        logger.info("Extracted URN cookie: %s", urn_value)
+        break
 
     headers = {
         "Connection": "keep-alive",
