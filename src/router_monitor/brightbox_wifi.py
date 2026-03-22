@@ -8,7 +8,7 @@ from rich.table import Table
 
 # Fields from PowerShell "netsh wlan show interfaces" (Windows)
 # Selected fields to monitor Wi-Fi performance
-NT_SELECTED_FIELDS: Final[set[str]] = {
+NT_SELECTED_FIELDS: Final[tuple[str, ...]] = (
     # "Name",  # interface name
     # "Description",
     # "GUID",
@@ -33,11 +33,11 @@ NT_SELECTED_FIELDS: Final[set[str]] = {
     # "QoS MSCS Configured",
     # "QoS Map Configured",
     # "QoS Map Allowed by Policy",
-}
+)
 
 # Fields from "iwconfig wlan0" (Linux)
 # Selected fields to monitor Wi-Fi performance
-POSIX_NT_SELECTED_FIELDS: Final[set[str]] = {
+POSIX_NT_SELECTED_FIELDS: Final[tuple[str, ...]] = (
     "ESSID",  # name of the access point
     # "Mode",  # e.g. Master, Ad-Hoc, Managed
     "Frequency",  # channel frequency, e.g. 2437MHz for channel 6
@@ -56,12 +56,28 @@ POSIX_NT_SELECTED_FIELDS: Final[set[str]] = {
     # "Tx excessive retries",
     # "Invalid misc",
     # "Missed beacon",
-}
+)
+
+# Fields from "iw dev wlan0 link" (Linux)
+# Selected fields to monitor Wi-Fi performance
+# POSIX_NT_SELECTED_FIELDS: Final[set[str]] = {
+#     "Connected to",  # MAC address of the access point
+#     "SSID",  # name of the access point
+#     "freq",  # channel frequency, e.g. 2437MHz for channel 6
+#     "RX",  # byte and packet count for received data
+#     "TX",  # byte and packet count for transmitted data
+#     "signal",  # rx signal strength (dBm)
+#     "rx bitrate"  # current receive rate (Mbps)
+#     "tx bitrate"  # current transmit rate (Mbps)
+#     # "bss flags",  # e.g. short-preamble short-slot-time
+#     # "dtim period",  # DTIM period in beacon intervals
+#     # "beacon interval",  # beacon interval in ms
+# }
 
 if os.name == "nt":
-    SELECTED_FIELDS: Final[set[str]] = NT_SELECTED_FIELDS
+    SELECTED_FIELDS: Final[tuple[str, ...]] = NT_SELECTED_FIELDS
 else:
-    SELECTED_FIELDS: Final[set[str]] = POSIX_NT_SELECTED_FIELDS
+    SELECTED_FIELDS: Final[tuple[str, ...]] = POSIX_NT_SELECTED_FIELDS
 
 # fmt: off
 # Matching fields for 'nt' (Windows) and 'posix' (Linux) platforms
