@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 import re
+import time
 from typing import TYPE_CHECKING, Final, cast
 
 import requests
@@ -26,9 +27,9 @@ console = Console()
 # Constants
 # ###################################
 ROUTER_IP: Final[str] = "http://192.168.1.1"
+
 LOGIN_HTM: Final[str] = f"{ROUTER_IP}/login.htm"
 LOGIN_CGI: Final[str] = f"{ROUTER_IP}/login.cgi"
-# STATUS_XML = f"{ROUTER_IP}/status_conn.xml"
 STATUS_HTM: Final[str] = f"{ROUTER_IP}/status.htm"
 DSL_STATUS_JS: Final[str] = f"{ROUTER_IP}/cgi/cgi_dsl_status.js"
 
@@ -137,6 +138,7 @@ def load_credentials() -> tuple[str, str]:
     dotenv_path = find_dotenv()
     logger.debug("Resolved .env path: %s", dotenv_path)
     load_dotenv(dotenv_path)
+    logger.debug("Loaded .env file from path: %s", dotenv_path)
 
     userlogin = os.getenv("USERLOGIN")
     password = os.getenv("PASSWORD")
@@ -144,6 +146,7 @@ def load_credentials() -> tuple[str, str]:
         msg = "USERLOGIN and PASSWORD must be set in .env"
         logger.error(msg)
         raise RuntimeError(msg)
+
     return userlogin, password
 
 
@@ -151,8 +154,31 @@ def create_authenticated_session(userlogin: str, password: str) -> requests.Sess
     """Log in to the router and return an authenticated session."""
     session = requests.Session()
     logger.info("Attempting initial GET to %s", LOGIN_HTM)
-    sess_resp = session.get(LOGIN_HTM, timeout=5)
-    logger.info("Initial GET status: %s", sess_resp.status_code)
+
+    # requests.adapter has a retry mechanism for certain errors, but we'll implement our own for ConnectTimeoutError
+    # Use an exponential backoff <https://en.wikipedia.org/wiki/Exponential_backoff>
+    backoff_multiplier = 1  # seconds, can be adjusted based on expected router response times
+    max_retries = 6  # e.g. 1 + 2 + 4 + 8 + 16 + 32 = 63sec total wait time if all retries needed
+
+    for this_attempt in range(max_retries + 1):
+        try:
+            session_resp = session.get(LOGIN_HTM, timeout=5)
+            logger.info("GET status: %s", session_resp.status_code)
+            break
+        except (ConnectionError, requests.Timeout) as e:
+            if this_attempt < max_retries:
+                connect_delay = backoff_multiplier * (2**this_attempt)
+                logger.warning(
+                    "(Attempt %d/%d) Connection %s failed, retrying in %d seconds",
+                    this_attempt + 1,
+                    max_retries,
+                    LOGIN_HTM,
+                    connect_delay,
+                )
+                logger.info("Connection failure error: %s", e)
+                time.sleep(connect_delay)
+            else:
+                raise  # last exception will propagate
 
     payload = {
         "usr": userlogin,
@@ -161,7 +187,7 @@ def create_authenticated_session(userlogin: str, password: str) -> requests.Sess
     }
     logger.info("Submitting login form to %s", LOGIN_CGI)
     cgi_resp = session.post(LOGIN_CGI, data=payload, timeout=5)
-    logger.info("Login POST status: %s", cgi_resp.status_code)
+    logger.info("POST status: %s", cgi_resp.status_code)
     return session
 
 
@@ -179,27 +205,38 @@ def extract_js_variable(js_blob: str, variable: str) -> list[dict[str, str] | No
 
 def fetch_line_status(session: requests.Session) -> dict[str, str]:
     """Fetch DSL status JS and return the first xdslLineStatus entry."""
-    max_retry_attempts = 4
-    retry_attempt_count = 0
+    urn_value = None  # assign to prevent `reportPossiblyUnboundVariable`
+    logger.info("Attempting initial GET to %s", STATUS_HTM)
 
     # STATUS_HTML has been seen to not be populated with URN Cookie
-    # If that happens, retry max_retry_attempts times
-    while True:
-        logger.info("Requesting status page %s for URN", STATUS_HTM)
+    # If that happens, retry a few times
+    backoff_multiplier = 0.5  # seconds, can be adjusted based on expected router response times
+    max_retries = 5  # e.g. 0.5 + 1 + 2 + 4 + 8 = 15.5sec total wait time if all retries needed
+
+    for this_attempt in range(max_retries + 1):
         status_resp = session.get(STATUS_HTM)
-        logger.info("Status page response: %s", status_resp.status_code)
+        logger.info("GET status: %s", status_resp.status_code)
 
         match = re.search(r"var\s+new_urn\s*=\s*'([^']+)'", status_resp.text)
         if match is None:
-            retry_attempt_count += 1
-            if retry_attempt_count > max_retry_attempts:
-                msg = "Could not extract new_urn in status.htm response"
+            if this_attempt < max_retries:
+                connect_delay = backoff_multiplier * (2**this_attempt)
+                logger.warning(
+                    "(Attempt %d/%d) new_urn not found, retrying in %d seconds",
+                    this_attempt + 1,
+                    max_retries,
+                    connect_delay,
+                )
+                time.sleep(connect_delay)
+            else:
+                logger.debug("Response content for debugging:\n%s", status_resp.text)
+                msg = f"Could not extract new_urn from {STATUS_HTM} after {max_retries} attempts"
                 logger.error(msg)
                 raise RuntimeError(msg)
-        
-        urn_value = match.group(1)
-        logger.info("Extracted URN cookie: %s", urn_value)
-        break
+        else:
+            urn_value = match.group(1)
+            logger.info("Extracted URN cookie: %s", urn_value)
+            break
 
     headers = {
         "Connection": "keep-alive",
