@@ -157,20 +157,20 @@ def create_authenticated_session(userlogin: str, password: str) -> requests.Sess
 
     # requests.adapter has a retry mechanism for certain errors, but we'll implement our own for ConnectTimeoutError
     # Use an exponential backoff <https://en.wikipedia.org/wiki/Exponential_backoff>
-    backoff_multiplier = 1  # seconds, can be adjusted based on expected router response times
+    backoff_multiplier = 0.5  # seconds, can be adjusted based on expected router response times
     max_retries = 6  # e.g. 1 + 2 + 4 + 8 + 16 + 32 = 63sec total wait time if all retries needed
 
-    for this_attempt in range(max_retries + 1):
+    for this_attempt in range(1, max_retries + 1):
         try:
             session_resp = session.get(LOGIN_HTM, timeout=5)
             logger.info("GET status: %s", session_resp.status_code)
             break
         except (ConnectionError, requests.Timeout) as e:
-            if this_attempt < max_retries:
+            if this_attempt <= max_retries:
                 connect_delay = backoff_multiplier * (2**this_attempt)
                 logger.warning(
                     "(Attempt %d/%d) Connection %s failed, retrying in %d seconds",
-                    this_attempt + 1,
+                    this_attempt,
                     max_retries,
                     LOGIN_HTM,
                     connect_delay,
@@ -211,19 +211,19 @@ def fetch_line_status(session: requests.Session) -> dict[str, str]:
     # STATUS_HTML has been seen to not be populated with URN Cookie
     # If that happens, retry a few times
     backoff_multiplier = 0.5  # seconds, can be adjusted based on expected router response times
-    max_retries = 5  # e.g. 0.5 + 1 + 2 + 4 + 8 = 15.5sec total wait time if all retries needed
+    max_retries = 6  # e.g. 1 + 2 + 4 + 8 + 16 + 32 = 63sec total wait time if all retries needed
 
-    for this_attempt in range(max_retries + 1):
+    for this_attempt in range(1, max_retries + 1):
         status_resp = session.get(STATUS_HTM)
         logger.info("GET status: %s", status_resp.status_code)
 
         match = re.search(r"var\s+new_urn\s*=\s*'([^']+)'", status_resp.text)
         if match is None:
-            if this_attempt < max_retries:
+            if this_attempt <= max_retries:
                 connect_delay = backoff_multiplier * (2**this_attempt)
                 logger.warning(
-                    "(Attempt %d/%d) new_urn not found, retrying in %d seconds",
-                    this_attempt + 1,
+                    "(Attempt %d/%d) failed to parse new_urn, retrying in %d seconds",
+                    this_attempt,
                     max_retries,
                     connect_delay,
                 )
