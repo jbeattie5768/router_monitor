@@ -30,3 +30,7 @@ wheels/
 
 # PyTest
 .cov*
+
+# Environment Files
+.env
+
