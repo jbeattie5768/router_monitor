@@ -10,7 +10,12 @@ import logging
 import os
 import re
 import time
-from typing import TYPE_CHECKING, Final, cast
+import xml.etree.ElementTree as ET
+from ast import literal_eval
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import unquote
 
 import requests
 from dotenv import find_dotenv, load_dotenv
@@ -32,9 +37,17 @@ LOGIN_HTM: Final[str] = f"{ROUTER_IP}/login.htm"
 LOGIN_CGI: Final[str] = f"{ROUTER_IP}/login.cgi"
 STATUS_HTM: Final[str] = f"{ROUTER_IP}/status.htm"
 DSL_STATUS_JS: Final[str] = f"{ROUTER_IP}/cgi/cgi_dsl_status.js"
+STATUS_CONN_XML: Final[str] = f"{ROUTER_IP}/status_conn.xml"
 
 # Find the key name *before* a colon (:) and match the name and colon, e.g. state:
 KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"(?<=\{|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s*:")
+
+# Values taken from cgi/cgi_status.js in the router's web interface
+# Optionally, we could read these direct from the JS file
+WAN_TYPE: dict[str, int] = {
+    # "Ethernet": 1,
+    "ADSL": 2,  # only interested in the DSL status for now
+}
 
 # JS var entries in dsl_status.js
 EXTRACT_DATA: Final[list[str]] = [
@@ -136,7 +149,6 @@ def build_metrics_table(line_status: dict[str, str]) -> Table:
 def load_credentials() -> tuple[str, str]:
     """Load USERLOGIN/PASSWORD from the .env file."""
     dotenv_path = find_dotenv()
-    logger.debug("Resolved .env path: %s", dotenv_path)
     load_dotenv(dotenv_path)
     logger.debug("Loaded .env file from path: %s", dotenv_path)
 
@@ -151,19 +163,38 @@ def load_credentials() -> tuple[str, str]:
 
 
 def create_authenticated_session(userlogin: str, password: str) -> requests.Session:
-    """Log in to the router and return an authenticated session."""
+    """Login to the router and return an authenticated session."""
     session = requests.Session()
-    logger.info("Attempting initial GET to %s", LOGIN_HTM)
 
     # requests.adapter has a retry mechanism for certain errors, but we'll implement our own for ConnectTimeoutError
     # Use an exponential backoff <https://en.wikipedia.org/wiki/Exponential_backoff>
     backoff_multiplier = 0.5  # seconds, can be adjusted based on expected router response times
     max_retries = 6  # e.g. 1 + 2 + 4 + 8 + 16 + 32 = 63sec total wait time if all retries needed
 
+    logger.debug("Checking %s is available", ROUTER_IP)
+    for this_attempt in range(1, max_retries + 1):
+        req_resp = requests.get(ROUTER_IP, timeout=5)
+        logger.debug("GET status: %s", req_resp.status_code)
+        if req_resp.status_code == requests.codes.ok:
+            break
+
+        if this_attempt <= max_retries:
+            connect_delay = backoff_multiplier * (2**this_attempt)
+            logger.warning(
+                "(Attempt %d/%d) Router not responding at %s, retrying in %d seconds",
+                this_attempt,
+                max_retries,
+                ROUTER_IP,
+                connect_delay,
+            )
+            time.sleep(connect_delay)
+
+    # Now login
+    logger.debug("Logging into router: %s", LOGIN_HTM)
     for this_attempt in range(1, max_retries + 1):
         try:
             session_resp = session.get(LOGIN_HTM, timeout=5)
-            logger.info("GET status: %s", session_resp.status_code)
+            logger.debug("GET status: %s", session_resp.status_code)
             break
         except (ConnectionError, requests.Timeout) as e:
             if this_attempt <= max_retries:
@@ -256,6 +287,117 @@ def fetch_line_status(session: requests.Session) -> dict[str, str]:
     return line_status
 
 
+@dataclass(slots=True)
+class InternetState:
+    """High-level summary of one WAN interface."""
+
+    wan_type: str
+    slot: int
+    raw_state: str
+    is_enabled: bool
+    is_connected: bool
+    uptime_seconds: int | None
+    uptime_hms: str | None
+
+
+def _parse_router_array(root: ET.Element, tag: str) -> list[Any]:
+    node = root.find(tag)
+    if node is None:
+        msg = f"{tag} missing from status file"
+        raise KeyError(msg)
+
+    raw_value = unquote(node.attrib["value"])
+    sanitized = raw_value.replace("null", "None")
+    return literal_eval(sanitized)
+
+
+def _parse_state(entry: list[str] | None) -> tuple[str, int | None]:
+    if not entry:
+        msg = "Empty WAN status entry"
+        raise ValueError(msg)
+
+    parts = entry[0].split(";")
+    state = parts[0]
+    uptime = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+    return state, uptime
+
+
+def _format_hms(seconds: int | None) -> str | None:
+    """Return an HH:MM:SS string for the supplied duration."""
+
+    if seconds is None:
+        return None
+
+    total_seconds = int(timedelta(seconds=seconds).total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def internet_state(xml_data: str, wan_type: str) -> InternetState:
+    """Return the connection status for the requested WAN type."""
+    try:
+        slot = WAN_TYPE[wan_type]
+    except KeyError as exc:
+        msg = f"WAN type '{wan_type}' is not recognized. Valid types: {list(WAN_TYPE.keys())}"
+        raise ValueError(msg) from exc
+
+    # XML parsers are vulnerable to XML attacks, but we trust the router's output
+    # Use <https://pypi.org/project/defusedxml/.ElementTree> if concerned
+    root = ET.fromstring(xml_data)
+    wan_enable = _parse_router_array(root, "wan_enable")
+    wan_conn_status = _parse_router_array(root, "wanConnStatus")
+    sys_up = root.find("sys_up_time")
+    sys_up_seconds = int(sys_up.attrib["value"]) if sys_up is not None else None
+
+    is_enabled = bool(wan_enable[slot - 1] and wan_enable[slot - 1][0] == "1")
+    raw_state, since_boot = _parse_state(wan_conn_status[slot - 1])
+    is_connected = is_enabled and raw_state == "connected"
+    uptime_seconds = None
+    if since_boot and since_boot != 0 and sys_up_seconds is not None and sys_up_seconds >= since_boot:
+        uptime_seconds = sys_up_seconds - since_boot
+    uptime_hms = _format_hms(uptime_seconds)
+
+    return InternetState(
+        wan_type=wan_type,
+        slot=slot,
+        raw_state=raw_state,
+        is_enabled=is_enabled,
+        is_connected=is_connected,
+        uptime_seconds=uptime_seconds,
+        uptime_hms=uptime_hms,
+    )
+
+
+def fetch_connection_status(session: requests.Session) -> None | InternetState:
+    """Fetch the connection status from the router."""
+    state = None
+    status_resp = session.get(STATUS_CONN_XML)
+    logger.info("GET status: %s", status_resp.status_code)
+    for name in WAN_TYPE:
+        state = internet_state(status_resp.text, name)
+        logger.debug(
+            "%s, %s, %s, %s, %s, %s, %s)",
+            state.wan_type,
+            state.slot,
+            state.raw_state,
+            state.is_enabled,
+            state.is_connected,
+            state.uptime_seconds,
+            state.uptime_hms,
+        )
+
+    return state
+
+
+def _print_connection_status(state: InternetState) -> None:
+    enabled = "enabled" if state.is_enabled else "disabled"
+    online = "online" if state.is_connected else "offline"
+    print(
+        f"{state.wan_type} (slot {state.slot}) is {enabled} and {online} (state={state.raw_state}, uptime={state.uptime_hms or 'N/A'})"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_cli_args(argv)
     configure_logging(args.verbose)
@@ -263,8 +405,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     userlogin, password = load_credentials()
     session = create_authenticated_session(userlogin, password)
     line_status = fetch_line_status(session)
-
     console.print(build_metrics_table(line_status))
+
+    connection_status = fetch_connection_status(session)
+    if connection_status:
+        _print_connection_status(connection_status)
 
 
 if __name__ == "__main__":
