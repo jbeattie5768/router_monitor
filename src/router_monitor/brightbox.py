@@ -296,6 +296,7 @@ class InternetState:
     raw_state: str
     is_enabled: bool
     is_connected: bool
+    sys_up_seconds: str | None
     uptime_seconds: int | None
     uptime_hms: str | None
 
@@ -356,6 +357,7 @@ def internet_state(xml_data: str, wan_type: str) -> InternetState:
     uptime_seconds = None
     if since_boot and since_boot != 0 and sys_up_seconds is not None and sys_up_seconds >= since_boot:
         uptime_seconds = sys_up_seconds - since_boot
+    sys_up_seconds = _format_hms(sys_up_seconds) if sys_up_seconds is not None else None
     uptime_hms = _format_hms(uptime_seconds)
 
     return InternetState(
@@ -364,6 +366,7 @@ def internet_state(xml_data: str, wan_type: str) -> InternetState:
         raw_state=raw_state,
         is_enabled=is_enabled,
         is_connected=is_connected,
+        sys_up_seconds=sys_up_seconds,
         uptime_seconds=uptime_seconds,
         uptime_hms=uptime_hms,
     )
@@ -377,12 +380,13 @@ def fetch_connection_status(session: requests.Session) -> None | InternetState:
     for name in WAN_TYPE:
         state = internet_state(status_resp.text, name)
         logger.debug(
-            "%s, %s, %s, %s, %s, %s, %s)",
+            "%s, %s, %s, %s, %s, %s, %s, %s)",
             state.wan_type,
             state.slot,
             state.raw_state,
             state.is_enabled,
             state.is_connected,
+            state.sys_up_seconds,
             state.uptime_seconds,
             state.uptime_hms,
         )
@@ -393,6 +397,7 @@ def fetch_connection_status(session: requests.Session) -> None | InternetState:
 def _print_connection_status(state: InternetState) -> None:
     enabled = "enabled" if state.is_enabled else "disabled"
     online = "online" if state.is_connected else "offline"
+    print(f"System uptime: {state.sys_up_seconds or 'N/A'}")
     print(
         f"{state.wan_type} (slot {state.slot}) is {enabled} and {online} (state={state.raw_state}, uptime={state.uptime_hms or 'N/A'})"
     )
